@@ -1,5 +1,7 @@
 #! /usr/bin/env bash
 
+set -ex
+
 # Download Promethion bulk RNA-Seq FASTQ files from NCBI (GEO SuperSeries GSE248118)
 fastq-dump --gzip SRR26865809
 mv SRR26865809.fastq.gz fastq_ont/LIB5432309_SAM24385452.fastq.gz
@@ -52,7 +54,7 @@ samtools index truncated_scrnaseq.bam
 wget https://zenodo.org/record/10895895/files/COV362_Rep1.bam
 samtools index COV362_Rep1.bam
 wget https://zenodo.org/record/10895895/files/IGROV-1_Rep1.bam
-samtools index IGROV-1.bam
+samtools index IGROV-1_Rep1.bam
 wget https://zenodo.org/record/10895895/files/OVKATE_Rep1.bam
 samtools index OVKATE_Rep1.bam
 wget https://zenodo.org/record/10895895/files/OVMANA_Rep1.bam
