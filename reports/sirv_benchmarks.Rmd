@@ -91,14 +91,58 @@ bambu_correct_tpm_list <- lapply(bambu_tpm_list, function(tpms) {
 bambu_fractions <- sapply(bambu_correct_tpm_list, sum) / sapply(bambu_tpm_list, sum)
 ```
 
+
+Prepare LRAA TPM data:
+```{r, message = FALSE, warning = FALSE}
+LRAA_tpm_list <- lapply(sample_ids, function(sample_id) {
+    tx_df <- read_delim(file.path(
+        result_dir, "../__LRAA/run_over/LRAA.over.quant.expr")
+    )
+    tpm_values <- tx_df[, 7, drop = TRUE]
+    tpm_values <- tpm_values / sum(tpm_values) * 1e6
+    names(tpm_values) <- tx_df$transcript_id
+    return(tpm_values)
+})
+names(LRAA_tpm_list) <- paste0("LRAA.", sample_ids)
+LRAA_correct_tpm_list <- lapply(LRAA_tpm_list, function(tpms) {
+    tpms[names(tpms) %in% correct_ref_tx_ids]
+})
+LRAA_fractions <- sapply(LRAA_correct_tpm_list, sum) / sapply(LRAA_tpm_list, sum)
+```
+
+```{r}
+
+LRAA_tpm_compare = full_join(
+  data.frame(transcript_id = names(LRAA_correct_tpm_list$LRAA.cdna), 
+              correct_tpm = LRAA_correct_tpm_list$LRAA.cdna),
+  data.frame(transcript_id = names(LRAA_tpm_list$LRAA.cdna),
+              tpm = LRAA_tpm_list$LRAA.cdna),
+  by='transcript_id')
+
+```
+
+```{r}
+
+LRAA_tpm_compare %>% ggplot(aes(x=correct_tpm, y=tpm)) + geom_point() +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_abline(slope=1) +
+  theme_bw()
+
+
+```
+
+
+
 Plot fractions of TPMs from correct transcripts:
 ```{r, message = FALSE, warning = FALSE}
 plot_df <- data.frame(
-    tool = c("Isosceles", "IsoQuant", "Bambu"),
+    tool = c("Isosceles", "IsoQuant", "Bambu", "LRAA"),
     value = c(
         isosceles_fractions["Isosceles.cdna"],
         isoquant_fractions["IsoQuant.cdna"],
-        bambu_fractions["bambu.cdna"]
+        bambu_fractions["bambu.cdna"],
+        LRAA_fractions["LRAA.cdna"]
     )
 )
 plot_df$tool <- fct_reorder(plot_df$tool, plot_df$value)
@@ -114,7 +158,8 @@ ggplot(plot_df, mapping = aes(x = value,
     ) +
     scale_fill_manual(values = c(Bambu = "mediumseagreen",
                                  Isosceles = "black",
-                                 IsoQuant = "gold")) +
+                                 IsoQuant = "gold",
+                                 LRAA = "purple")) +
     lims(x = c(0, 1.1)) +
     labs(
         x = "Read precision (expression from correct transcripts)",
@@ -204,10 +249,18 @@ isosceles_intron_list <- lapply(sample_ids, function(sample_id) {
 names(isosceles_intron_list) <- paste0("Isosceles.", sample_ids)
 ```
 
+```{r}
+
+source("../../_Isosceles-code/R/prepare_reference_annotations.R")
+source("../../_Isosceles-code/R/merge_annotated_genes.R")
+source("../../_Isosceles-code/R/get_first_last_grange.R")
+
+```
+
 Prepare IsoQuant intron position data:
 ```{r, message = FALSE, warning = FALSE}
 isoquant_intron_list <- lapply(sample_ids, function(sample_id) {
-    splicing_df <- Isosceles:::prepare_reference_annotations(file.path(
+    splicing_df <- prepare_reference_annotations(file.path(
         result_dir, glue("isoquant_{sample_id}_insufficient_extended_annotations.gtf")
     ))$splicing_df
     tpm_df <- read_delim(file.path(
@@ -227,7 +280,7 @@ names(isoquant_intron_list) <- paste0("IsoQuant.", sample_ids)
 Prepare bambu intron position data:
 ```{r, message = FALSE, warning = FALSE}
 bambu_intron_list <- lapply(sample_ids, function(sample_id) {
-    splicing_df <- Isosceles:::prepare_reference_annotations(file.path(
+    splicing_df <- prepare_reference_annotations(file.path(
         result_dir, glue("bambu_{sample_id}_insufficient_extended_annotations.gtf")
     ))$splicing_df
     count_df <- read_delim(file.path(
@@ -244,23 +297,51 @@ bambu_intron_list <- lapply(sample_ids, function(sample_id) {
 names(bambu_intron_list) <- paste0("bambu.", sample_ids)
 ```
 
+Prepare LRAA intron position data:
+
+```{r, message = FALSE, warning = FALSE}
+LRAA_intron_list <- lapply(sample_ids, function(sample_id) {
+    splicing_df <- prepare_reference_annotations(file.path(
+        result_dir, glue("../__LRAA/run_insufficient/LRAA.insufficient.clean.gtf")
+    ))$splicing_df
+    count_df <- read_delim(file.path(
+        result_dir, glue("../__LRAA/run_insufficient/LRAA.insufficient.quant.expr")
+    ))
+    count_df <- count_df[count_df[, 6, drop = TRUE] > 0,]
+    expressed_tx_ids <- count_df$transcript_id
+    count_selector <- sapply(strsplit(splicing_df$compatible_tx, ","),
+                             function(x) {any(x %in% expressed_tx_ids)})
+    splicing_df <- splicing_df[count_selector,]
+    intron_positions <- splicing_df$intron_positions
+    return(intron_positions)
+})
+names(LRAA_intron_list) <- paste0("LRAA.", sample_ids)
+```
+
+
+
 Plot transcript detection metrics:
 ```{r, message = FALSE, warning = FALSE}
-tools <- c("Isosceles", "IsoQuant", "Bambu")
+tools <- c("Isosceles", "IsoQuant", "Bambu", "LRAA")
 plot_df <- data.frame(
     tool = rep(tools, each = 3),
-    metric = rep(c("Precision", "Recall", "F1"), 3),
+    metric = rep(c("Precision", "Recall", "F1"), 4),
     value = c(
         precision(isosceles_intron_list[["Isosceles.cdna"]]),
         recall(isosceles_intron_list[["Isosceles.cdna"]]),
         f1_score(isosceles_intron_list[["Isosceles.cdna"]]),
+        
         precision(isoquant_intron_list[["IsoQuant.cdna"]]),
         recall(isoquant_intron_list[["IsoQuant.cdna"]]),
         f1_score(isoquant_intron_list[["IsoQuant.cdna"]]),
+        
         precision(bambu_intron_list[["bambu.cdna"]]),
         recall(bambu_intron_list[["bambu.cdna"]]),
-        f1_score(bambu_intron_list[["bambu.cdna"]])
-    )
+        f1_score(bambu_intron_list[["bambu.cdna"]]),
+        
+        precision(LRAA_intron_list[["LRAA.cdna"]]),
+        recall(LRAA_intron_list[["LRAA.cdna"]]),
+        f1_score(LRAA_intron_list[["LRAA.cdna"]]) )
 )
 plot_df$tool <- fct_reorder(plot_df$tool, plot_df$value)
 plot_df$metric <- fct_rev(factor(
@@ -279,7 +360,8 @@ ggplot(plot_df, mapping = aes(x = value,
     lims(x = c(0, 1.1)) +
     scale_fill_manual(values = c(Isosceles = "black",
                                  Bambu = "mediumseagreen",
-                                 IsoQuant = "gold")) +
+                                 IsoQuant = "gold",
+                                 LRAA = "purple")) +
     theme_classic() +
     theme(legend.title = element_blank(),
           legend.position = "top",
@@ -297,13 +379,15 @@ Transcript detection results:
 classification_df <- data.frame(
     Isosceles = classify_tx(isosceles_intron_list[["Isosceles.cdna"]]),
     IsoQuant = classify_tx(isoquant_intron_list[["IsoQuant.cdna"]]),
-    Bambu = classify_tx(bambu_intron_list[["bambu.cdna"]])
+    Bambu = classify_tx(bambu_intron_list[["bambu.cdna"]]),
+    LRAA = classify_tx(LRAA_intron_list[["LRAA.cdna"]])
 )
 classification_df
 ```
 
 Plot transcript detection results:
 ```{r, message = FALSE, warning = FALSE}
+
 plot_df <- classification_df
 plot_df$metric <- rownames(plot_df)
 plot_df <- plot_df %>%
@@ -334,6 +418,73 @@ ggplot(plot_df, mapping = aes(x = value,
           axis.title.x = element_blank(),
           axis.title.y = element_blank())
 ```
+
+
+```{r}
+# extract transcripts according to the categories:
+
+classify_tx_df <- function(intron_positions) {
+    
+    df = data.frame(intron_positions = intron_positions)
+  
+    # df = df %>% mutate(tx_class = ifelse(intron_positions %in% correct_intron_positions, "TP", "NA"))
+    
+    df = df %>% mutate(tx_class = ifelse(intron_positions %in% insufficient_intron_positions, "TP_KNOWN", "NA"))
+    
+    df = df %>% mutate(tx_class = ifelse( 
+                (intron_positions %in% correct_intron_positions) &
+                !(intron_positions %in% insufficient_intron_positions), 
+                "TP_NOVEL", tx_class))
+        
+      
+    # FN = length(setdiff(correct_intron_positions, intron_positions)),
+    
+   
+    
+    #    FN_KNOWN = length(setdiff(
+    #        insufficient_intron_positions, intron_positions
+    #    )),
+    #    FN_NOVEL = length(setdiff(
+    #        setdiff(correct_intron_positions, insufficient_intron_positions),
+    #        intron_positions
+    #    )),
+        
+    df = df %>% mutate(tx_class = ifelse(!intron_positions %in% correct_intron_positions, "FP", tx_class) )
+        
+  
+        
+    return(df)
+}
+
+
+```
+
+
+```{r}
+
+LRAA_tx_classes = classify_tx_df(LRAA_intron_list[["LRAA.cdna"]])
+
+LRAA_tx_classes %>% head()
+
+```
+
+```{r}
+
+LRAA_splicing_df <- prepare_reference_annotations(file.path(
+        result_dir, glue("../__LRAA/run_insufficient/LRAA.insufficient.clean.gtf")
+    ))$splicing_df
+
+LRAA_tx_classes = left_join(LRAA_tx_classes, LRAA_splicing_df, by='intron_positions')
+
+LRAA_tx_classes %>% head()
+```
+```{r}
+
+write.table(LRAA_tx_classes %>% dplyr::select(compatible_tx, tx_class), file="../sirv_analysis/__LRAA/run_insufficient/LRAA.insuff.TP_FP_classes", sep="\t", row.names=F, quote=F)
+
+
+```
+
 
 # Session Info
 
