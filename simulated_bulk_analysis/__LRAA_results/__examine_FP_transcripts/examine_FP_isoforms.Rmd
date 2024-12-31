@@ -1,0 +1,120 @@
+---
+title: "examine_FP_isoforms"
+author: "bhaas"
+date: '2024-12-26'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+
+
+```{r}
+
+FPs = read.csv("FPs.list", header=F)[,1]
+
+containments_list = read.csv("containment_list.tsv", header=T, sep="\t")
+
+containments_list %>% head()
+```
+
+```{r}
+
+expr_vals = read.csv("sim_bulk_down_10.quant.expr", header=T, sep="\t")
+
+expr_vals %>% head()
+
+
+```
+
+```{r}
+
+
+expr_vals = expr_vals %>% mutate(FP = transcript_id %in% FPs)
+
+expr_vals %>% head()
+
+```
+
+
+```{r}
+
+expr_vals = expr_vals %>% mutate(is_contained = transcript_id %in% containments_list$contain.ey)
+ 
+ expr_vals %>% head()
+ 
+```
+
+
+```{r}
+
+expr_vals %>% group_by(FP, is_contained) %>% tally() %>% 
+    ggplot(aes(y=n, x=paste(FP, is_contained))) + geom_col(aes(fill=FP))
+
+
+
+```
+
+```{r}
+
+expr_vals = expr_vals %>%  mutate(FP_contained = paste(FP, is_contained))
+
+```
+
+
+```{r}
+
+expr_vals %>% 
+    
+    #mutate(TPM = ifelse(TPM < 0.01, 0.01, TPM)) %>%
+    
+    ggplot(aes(x=FP_contained, y=log(TPM+1))) + geom_violin()
+
+```
+
+
+
+```{r}
+
+expr_vals %>% filter(FP & is_contained) %>% head()
+
+```
+
+
+
+```{r}
+
+expr_vals %>% 
+    
+    ggplot(aes(x=FP_contained, y=unique_gene_read_fraction+0.01)) + geom_violin() + 
+    scale_y_log10()
+
+
+
+```
+
+
+
+```{r}
+
+expr_vals %>% filter(is_contained) %>% ggplot() + geom_density(aes(x=unique_gene_read_fraction, fill=FP), alpha=0.4) +
+    theme_bw() + 
+    scale_x_log10()
+
+
+```
+
+
+```{r}
+
+expr_vals %>% filter(is_contained) %>% ggplot() + geom_density(aes(x=TPM, fill=FP), alpha=0.4) +
+    theme_bw() + 
+    scale_x_log10()
+
+```
+
+
+
