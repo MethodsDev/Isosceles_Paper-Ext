@@ -69,6 +69,25 @@ isoquant_tpm_df <- as.data.frame(sapply(sample_ids, function(sample_id) {
 }))
 ```
 
+Prepare LRAA TPM data:
+```{r, message = FALSE, warning = FALSE}
+LRAA_tpm_df <- as.data.frame(sapply(sample_ids, function(sample_id) {
+    tx_df <- read_delim(file.path(
+        result_dir, glue("../__LRAA/LRAA_{sample_id}_transcript_tpm.tsv")
+    ))
+    tpm_values <- tx_df$TPM
+    names(tpm_values) <- tx_df$transcript_id
+    tpm_values <- tpm_values[ref_tx_df$NAME]
+    tpm_values[is.na(tpm_values)] <- 0
+    names(tpm_values) <- ref_tx_df$NAME
+    return(tpm_values)
+}))
+```
+
+
+
+
+
 Prepare bambu TPM data:
 ```{r, message = FALSE, warning = FALSE}
 bambu_tpm_df <- as.data.frame(sapply(sample_ids, function(sample_id) {
@@ -157,39 +176,52 @@ espresso_tpm_df <- as.data.frame(sapply(sample_ids, function(sample_id) {
 Prepare Spearman correlation data:
 ```{r, message = FALSE, warning = FALSE}
 tools <- c("Isosceles", "IsoQuant", "Bambu", "Flair", "NanoCount", "LIQA",
-           "ESPRESSO")
+           "ESPRESSO", "LRAA")
 spearman_cor_df <- data.frame(
     tool = rep(tools, each = 3),
-    mix = rep(c("mix_A", "mix_B", "both"), 7),
+    mix = rep(c("mix_A", "mix_B", "both"), 8),
     value = c(
         cor(isosceles_tpm_df$mixA_ont, ref_tx_df$MIX_A, method = "spearman"),
         cor(isosceles_tpm_df$mixB_ont, ref_tx_df$MIX_B, method = "spearman"),
         cor(c(isosceles_tpm_df$mixA_ont, isosceles_tpm_df$mixB_ont),
             c(ref_tx_df$MIX_A, ref_tx_df$MIX_B), method = "spearman"),
+        
         cor(isoquant_tpm_df$mixA_ont, ref_tx_df$MIX_A, method = "spearman"),
         cor(isoquant_tpm_df$mixB_ont, ref_tx_df$MIX_B, method = "spearman"),
         cor(c(isoquant_tpm_df$mixA_ont, isoquant_tpm_df$mixB_ont),
             c(ref_tx_df$MIX_A, ref_tx_df$MIX_B), method = "spearman"),
+        
         cor(bambu_tpm_df$mixA_ont, ref_tx_df$MIX_A, method = "spearman"),
         cor(bambu_tpm_df$mixB_ont, ref_tx_df$MIX_B, method = "spearman"),
         cor(c(bambu_tpm_df$mixA_ont, bambu_tpm_df$mixB_ont),
             c(ref_tx_df$MIX_A, ref_tx_df$MIX_B), method = "spearman"),
+        
         cor(flair_tpm_df$mixA_ont, ref_tx_df$MIX_A, method = "spearman"),
         cor(flair_tpm_df$mixB_ont, ref_tx_df$MIX_B, method = "spearman"),
         cor(c(flair_tpm_df$mixA_ont, flair_tpm_df$mixB_ont),
             c(ref_tx_df$MIX_A, ref_tx_df$MIX_B), method = "spearman"),
+        
         cor(nanocount_tpm_df$mixA_ont, ref_tx_df$MIX_A, method = "spearman"),
         cor(nanocount_tpm_df$mixB_ont, ref_tx_df$MIX_B, method = "spearman"),
         cor(c(nanocount_tpm_df$mixA_ont, nanocount_tpm_df$mixB_ont),
             c(ref_tx_df$MIX_A, ref_tx_df$MIX_B), method = "spearman"),
+        
         cor(liqa_tpm_df$mixA_ont, ref_tx_df$MIX_A, method = "spearman"),
         cor(liqa_tpm_df$mixB_ont, ref_tx_df$MIX_B, method = "spearman"),
         cor(c(liqa_tpm_df$mixA_ont, liqa_tpm_df$mixB_ont),
             c(ref_tx_df$MIX_A, ref_tx_df$MIX_B), method = "spearman"),
+        
         cor(espresso_tpm_df$mixA_ont, ref_tx_df$MIX_A, method = "spearman"),
         cor(espresso_tpm_df$mixB_ont, ref_tx_df$MIX_B, method = "spearman"),
         cor(c(espresso_tpm_df$mixA_ont, espresso_tpm_df$mixB_ont),
+            c(ref_tx_df$MIX_A, ref_tx_df$MIX_B), method = "spearman"),
+        
+        cor(LRAA_tpm_df$mixA_ont, ref_tx_df$MIX_A, method = "spearman"),
+        cor(LRAA_tpm_df$mixB_ont, ref_tx_df$MIX_B, method = "spearman"),
+        cor(c(LRAA_tpm_df$mixA_ont, LRAA_tpm_df$mixB_ont),
             c(ref_tx_df$MIX_A, ref_tx_df$MIX_B), method = "spearman")
+        
+        
     )
 )
 ```
@@ -202,39 +234,51 @@ spearman_cor_df
 Prepare mean relative difference data:
 ```{r, message = FALSE, warning = FALSE}
 tools <- c("Isosceles", "IsoQuant", "Bambu", "Flair", "NanoCount", "LIQA",
-           "ESPRESSO")
+           "ESPRESSO", "LRAA")
 mean_rel_diff_df <- data.frame(
     tool = rep(tools, each = 3),
-    mix = rep(c("mix_A", "mix_B", "both"), 7),
+    mix = rep(c("mix_A", "mix_B", "both"), 8),
     value = c(
         mean_rel_diff(isosceles_tpm_df$mixA_ont, ref_tx_df$MIX_A),
         mean_rel_diff(isosceles_tpm_df$mixB_ont, ref_tx_df$MIX_B),
         mean_rel_diff(c(isosceles_tpm_df$mixA_ont, isosceles_tpm_df$mixB_ont),
                       c(ref_tx_df$MIX_A, ref_tx_df$MIX_B)),
+        
         mean_rel_diff(isoquant_tpm_df$mixA_ont, ref_tx_df$MIX_A),
         mean_rel_diff(isoquant_tpm_df$mixB_ont, ref_tx_df$MIX_B),
         mean_rel_diff(c(isoquant_tpm_df$mixA_ont, isoquant_tpm_df$mixB_ont),
                       c(ref_tx_df$MIX_A, ref_tx_df$MIX_B)),
+        
         mean_rel_diff(bambu_tpm_df$mixA_ont, ref_tx_df$MIX_A),
         mean_rel_diff(bambu_tpm_df$mixB_ont, ref_tx_df$MIX_B),
         mean_rel_diff(c(bambu_tpm_df$mixA_ont, bambu_tpm_df$mixB_ont),
                       c(ref_tx_df$MIX_A, ref_tx_df$MIX_B)),
+        
         mean_rel_diff(flair_tpm_df$mixA_ont, ref_tx_df$MIX_A),
         mean_rel_diff(flair_tpm_df$mixB_ont, ref_tx_df$MIX_B),
         mean_rel_diff(c(flair_tpm_df$mixA_ont, flair_tpm_df$mixB_ont),
                       c(ref_tx_df$MIX_A, ref_tx_df$MIX_B)),
+        
         mean_rel_diff(nanocount_tpm_df$mixA_ont, ref_tx_df$MIX_A),
         mean_rel_diff(nanocount_tpm_df$mixB_ont, ref_tx_df$MIX_B),
         mean_rel_diff(c(nanocount_tpm_df$mixA_ont, nanocount_tpm_df$mixB_ont),
                       c(ref_tx_df$MIX_A, ref_tx_df$MIX_B)),
+        
         mean_rel_diff(liqa_tpm_df$mixA_ont, ref_tx_df$MIX_A),
         mean_rel_diff(liqa_tpm_df$mixB_ont, ref_tx_df$MIX_B),
         mean_rel_diff(c(liqa_tpm_df$mixA_ont, liqa_tpm_df$mixB_ont),
                       c(ref_tx_df$MIX_A, ref_tx_df$MIX_B)),
+        
         mean_rel_diff(espresso_tpm_df$mixA_ont, ref_tx_df$MIX_A),
         mean_rel_diff(espresso_tpm_df$mixB_ont, ref_tx_df$MIX_B),
         mean_rel_diff(c(espresso_tpm_df$mixA_ont, espresso_tpm_df$mixB_ont),
+                      c(ref_tx_df$MIX_A, ref_tx_df$MIX_B)),
+        
+        mean_rel_diff(LRAA_tpm_df$mixA_ont, ref_tx_df$MIX_A),
+        mean_rel_diff(LRAA_tpm_df$mixB_ont, ref_tx_df$MIX_B),
+        mean_rel_diff(c(LRAA_tpm_df$mixA_ont, LRAA_tpm_df$mixB_ont),
                       c(ref_tx_df$MIX_A, ref_tx_df$MIX_B))
+        
     )
 )
 ```
@@ -266,7 +310,9 @@ plot_spearman_cor <- function(mix_value, title = FALSE, max_x = 1) {
                                      Isosceles = "black",
                                      IsoQuant = "gold",
                                      LIQA = "deeppink",
-                                     NanoCount = "cornflowerblue")) +
+                                     NanoCount = "cornflowerblue",
+                                     LRAA = "purple")
+                          ) +
         lims(x = c(0, max_x)) +
         labs(
             x = "Correlation value",
@@ -331,7 +377,9 @@ plot_mean_rel_diff <- function(mix_value, title = FALSE, max_x = 2) {
                                      Isosceles = "black",
                                      IsoQuant = "gold",
                                      LIQA = "deeppink",
-                                     NanoCount = "cornflowerblue")) +
+                                     NanoCount = "cornflowerblue",
+                                     LRAA = "purple")
+                          ) +
         lims(x = c(0, max_x)) +
         labs(
             x = "Mean rel. diff.",
