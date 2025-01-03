@@ -307,7 +307,7 @@ LRAA_intron_list <- lapply(sample_ids, function(sample_id) {
     count_df <- read_delim(file.path(
         result_dir, glue("../__LRAA/run_insufficient/LRAA.insufficient.quant.expr")
     ))
-    count_df <- count_df[count_df[, 6, drop = TRUE] > 0,]
+    count_df <- count_df[count_df[, 7, drop = TRUE] > 0,]
     expressed_tx_ids <- count_df$transcript_id
     count_selector <- sapply(strsplit(splicing_df$compatible_tx, ","),
                              function(x) {any(x %in% expressed_tx_ids)})
@@ -464,11 +464,11 @@ classify_tx_df <- function(intron_positions) {
 
 LRAA_tx_classes = classify_tx_df(LRAA_intron_list[["LRAA.cdna"]])
 
-LRAA_tx_classes %>% head()
+LRAA_tx_classes = left_join(LRAA_tx_classes, 
+                            annotations_correct_df %>% select(intron_positions, compatible_gene_names, compatible_tx) %>%
+                              dplyr::rename(ref_gene_id = compatible_gene_names, ref_transcript_id = compatible_tx),
+                            by='intron_positions')
 
-```
-
-```{r}
 
 LRAA_splicing_df <- prepare_reference_annotations(file.path(
         result_dir, glue("../__LRAA/run_insufficient/LRAA.insufficient.clean.gtf")
@@ -476,14 +476,132 @@ LRAA_splicing_df <- prepare_reference_annotations(file.path(
 
 LRAA_tx_classes = left_join(LRAA_tx_classes, LRAA_splicing_df, by='intron_positions')
 
-LRAA_tx_classes %>% head()
+write.table(LRAA_tx_classes,
+            file="../sirv_analysis/__LRAA/run_insufficient/LRAA.insuff.TP_FP_classes", sep="\t", row.names=F, quote=F)
+
+
 ```
+
+
+```{r}
+bambu_tx_classes = classify_tx_df(bambu_intron_list[["bambu.cdna"]])
+
+bambu_tx_classes = left_join(bambu_tx_classes,
+                             annotations_correct_df %>% select(intron_positions, compatible_gene_names, compatible_tx) %>%
+                              dplyr::rename(ref_gene_id = compatible_gene_names, ref_transcript_id = compatible_tx),
+                            by='intron_positions')
+
+bambu_splicing_df <- prepare_reference_annotations(file.path(
+  result_dir, glue("bambu_cdna_insufficient_extended_annotations.gtf")
+))$splicing_df
+
+bambu_tx_classes = left_join(bambu_tx_classes, bambu_splicing_df, by='intron_positions')
+
+write.table(bambu_tx_classes,
+            file="../sirv_analysis/__LRAA/run_insufficient/bambu.insuff.TP_FP_classes", sep="\t", row.names=F, quote=F)
+
+```
+
 ```{r}
 
-write.table(LRAA_tx_classes %>% dplyr::select(compatible_tx, tx_class), file="../sirv_analysis/__LRAA/run_insufficient/LRAA.insuff.TP_FP_classes", sep="\t", row.names=F, quote=F)
+isoquant_tx_classes = classify_tx_df(isoquant_intron_list[["IsoQuant.cdna"]])
+
+isoquant_tx_classes = left_join(isoquant_tx_classes,
+                                annotations_correct_df %>% select(intron_positions, compatible_gene_names, compatible_tx) %>%
+                              dplyr::rename(ref_gene_id = compatible_gene_names, ref_transcript_id = compatible_tx),
+                            by='intron_positions')
+
+
+isoquant_splicing_df <- prepare_reference_annotations(file.path(
+  result_dir, glue("isoquant_cdna_insufficient_extended_annotations.gtf")
+))$splicing_df
+
+isoquant_tx_classes = left_join(isoquant_tx_classes, isoquant_splicing_df %>% select(intron_positions, compatible_tx), by='intron_positions')
+
+
+write.table(isoquant_tx_classes, file="../sirv_analysis/__LRAA/run_insufficient/isoquant.insuff.TP_FP_classes", sep="\t", row.names=F, quote=F)
+
+```
+
+```{r}
+
+isosceles_tx_classes = classify_tx_df(isosceles_intron_list[["Isosceles.cdna"]])
+
+isosceles_tx_classes = left_join(isosceles_tx_classes,
+                                 annotations_correct_df %>% select(intron_positions, compatible_gene_names, compatible_tx) %>%
+                              dplyr::rename(ref_gene_id = compatible_gene_names, ref_transcript_id = compatible_tx),
+                            by='intron_positions')
+
+
+se_transcript <- readRDS(file.path(
+  result_dir, glue("isosceles_cdna_over_se_transcript.rds")
+))
+tx_df <- as.data.frame(rowData(se_transcript))
+
+
+isosceles_tx_classes = left_join(isosceles_tx_classes, tx_df %>% select(intron_positions, compatible_tx), by='intron_positions')
+
+write.table(isosceles_tx_classes,
+            file="../sirv_analysis/__LRAA/run_insufficient/isosceles.insuff.TP_FP_classes", sep="\t", row.names=F, quote=F)
+
+```
+
+
+
+```{r}
+
+# compare TPs
+
+all_TPs = bind_rows(LRAA_tx_classes %>% filter(grepl("^TP", tx_class)) %>% select(ref_gene_id, ref_transcript_id) %>% mutate(method="LRAA"),
+                    bambu_tx_classes  %>% filter(grepl("^TP", tx_class)) %>% select(ref_gene_id, ref_transcript_id) %>% mutate(method="BAMBU"),
+                    isoquant_tx_classes %>% filter(grepl("^TP", tx_class)) %>% select(ref_gene_id, ref_transcript_id) %>% mutate(method="IsoQuant"),
+                    isosceles_tx_classes %>% filter(grepl("^TP", tx_class)) %>% select(ref_gene_id, ref_transcript_id) %>% mutate(method="Isosceles"),
+                    ) 
+
+
+all_TPs %>% head()
+```
+
+```{r}
+
+TPs_by_methods = all_TPs %>% group_by(ref_gene_id, ref_transcript_id) %>% 
+  arrange(method) %>%
+  mutate(num_progs = n(), methods = paste(method, collapse=',')) %>%
+  ungroup() %>%
+  select(ref_gene_id, ref_transcript_id, num_progs, methods) %>% unique() %>%
+  arrange(desc(num_progs))
+
+TPs_by_methods
+
+```
+
+```{r}
+
+TPs_by_methods %>% group_by(methods) %>% tally()
 
 
 ```
+
+```{r}
+# which ones did LRAA miss?
+
+TPs_by_methods %>% group_by(methods) %>% tally() %>% filter(! grepl("LRAA", methods))
+
+
+```
+
+
+```{r}
+
+TPs_by_methods %>% filter(! grepl("LRAA", methods)) %>% filter(grepl("Isosceles", methods)) %>% arrange(ref_transcript_id)
+ 
+
+
+```
+
+
+
+
 
 
 # Session Info
