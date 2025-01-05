@@ -576,68 +576,6 @@ def quantileTpmDict(ref, n):
     return quantile_tpm_dict
 
 
-def scatterplot(ref, dfs, n):
-    """
-    Generates side-by-side scatterplots comparing observed and
-    ground truth TPMs from all tools.
-    'ref': reference dataframe
-    'dfs': list of dataframes made with countsWithIntronIds().
-    'n': an integer representing the number of tools being plotted.
-    """
-
-    # Define figure and panel dimensions
-    fig, ax = plt.subplots(1, n, figsize=(2.7 * n, 2.69), tight_layout=True)
-
-    countDict = {}
-    for df in dfs:
-        bigDf = pd.merge(ref, df, how="left", on="intronId").fillna(0)
-        colnames = list(bigDf.columns.values)
-        sampleName = bigDf.columns[-1]
-        name, c, l = colorAndLabel(sampleName)
-        for counts in [bigDf[colnames[4]], bigDf[colnames[5]]]:
-            counts = counts.astype(
-                float
-            )  # Convert ground truth & estimated counts to float type.
-            counts = (counts / np.sum(counts)) * 1000000  # Re-normalize to TPMs.
-        groundTruth = np.array(bigDf[colnames[4]])
-        estimated = np.array(bigDf[colnames[5]])
-        countDict[name] = [groundTruth, estimated, c]  # Append counts to a dictionary.
-
-        bigDf.to_csv(sampleName + ".bigdf.tsv", sep="\t", index=False)
-
-    countDict = OrderedDict(sorted(countDict.items()))  # Sort count dictionary by keys
-    subplotIndex = 0  # to index the subplots
-    for program, tpm in countDict.items():  # by program name, alphabetically.
-        groundTruth = tpm[0].copy()
-        estimated = tpm[1].copy()
-        estimated[estimated <= 0.001] = 0.001  # Set all estimated values that are
-        # <= 0.001 to 0.001 to show instances of
-        # undetected transcripts at x = 0.001.
-        color = tpm[2]
-        corr = r"$\rho$ = " + str(round(stat.spearmanr(tpm[1], tpm[0]).correlation, 3))
-        pcorr = "R = " + str(
-            round(stat.pearsonr(np.log(tpm[1] + 1), np.log(tpm[0] + 1)).statistic, 3)
-        )
-
-        ax[subplotIndex].plot(groundTruth, groundTruth, color="red", lw=1)
-        ax[subplotIndex].scatter(estimated, groundTruth, 0.25, c=color, alpha=0.5)
-        ax[subplotIndex].text(0.002, 3000, corr)
-        ax[subplotIndex].text(0.002, 1000, pcorr)
-        ax[subplotIndex].text(0.002, 100, program)
-
-        ax[subplotIndex].set_xlim(0.0005, 10000)
-        ax[subplotIndex].set_ylim(0.1, 10000)
-        ax[subplotIndex].set_yscale("log")
-        ax[subplotIndex].set_xscale("log")
-        ax[subplotIndex].set_xticks([0.001, 0.01, 1, 100, 10000])
-        ax[subplotIndex].set_xticklabels(
-            ["0", r"$10^{-2}$", r"$10^0$", r"$10^2$", r"$10^4$"]
-        )
-        ax[subplotIndex].set_xlabel("estimated TPM")
-        ax[subplotIndex].set_ylabel("ground truth TPM")
-        subplotIndex += 1
-
-
 def scatterplot_adj(i_ref_df, progname_to_df_dict):
     """
     Generates side-by-side scatterplots comparing observed and
@@ -720,7 +658,7 @@ def scatterplot_adj(i_ref_df, progname_to_df_dict):
         subplotIndex += 1
 
 
-def maplot(ref, dfs, n):
+def ma_plot_adj(i_ref_df, progname_to_df_dict):
     """
     Generates side-by-side MA plots comparing observed and
     ground truth TPMs from all tools.
@@ -729,25 +667,44 @@ def maplot(ref, dfs, n):
     'n': an integer representing the number of tools being plotted.
     """
 
-    # Define figure and panel dimensions
-    fig, ax = plt.subplots(1, n, figsize=(2.7 * n, 2.69), tight_layout=True)
+    assert (
+        i_ref_df.index.name == "intronId"
+    ), "Error, i_ref_df input not indexed on intronId"
+
+    ref_quants = i_ref_df.copy().rename(columns={"tpm": "ref_tpm"})
 
     countDict = {}
-    for df in dfs:
-        bigDf = pd.merge(ref, df, how="left", on="intronId").fillna(0)
+    for progname, df in progname_to_df_dict.items():
+
+        assert (
+            df.index.name == "intronId"
+        ), "Error, df for {} not indexed on intronId".format(progname)
+
+        prog_tpm_colname = progname + "_tpm"
+
+        prog_quants = df[["tpm"]].copy().rename(columns={"tpm": prog_tpm_colname})
+
+        bigDf = prog_quants.join(ref_quants, how="inner").fillna(0)
+
         colnames = list(bigDf.columns.values)
-        sampleName = bigDf.columns[-1]
-        name, c, l = colorAndLabel(sampleName)
-        for counts in [bigDf[colnames[4]], bigDf[colnames[5]]]:
+
+        name, c, l = colorAndLabel(progname)
+        for counts in [bigDf["ref_tpm"], bigDf[prog_tpm_colname]]:
             counts = counts.astype(
                 float
             )  # Convert ground truth & estimated counts to float type.
             counts = (counts / np.sum(counts)) * 1000000  # Re-normalize to TPMs.
-        groundTruth = np.array(bigDf[colnames[4]])
-        estimated = np.array(bigDf[colnames[5]])
+
+        groundTruth = np.array(bigDf["ref_tpm"])
+        estimated = np.array(bigDf[prog_tpm_colname])
         countDict[name] = [groundTruth, estimated, c]  # Append counts to a dictionary.
 
     countDict = OrderedDict(sorted(countDict.items()))  # Sort count dictionary by keys
+
+    # Define figure and panel dimensions
+    n = len(progname_to_df_dict)
+    fig, ax = plt.subplots(1, n, figsize=(2.7 * n, 2.69), tight_layout=True)
+
     subplotIndex = 0  # to index the subplots
     for program, tpm in countDict.items():  # by program name, alphabetically.
         groundTruth = tpm[0].copy()
@@ -771,18 +728,29 @@ def maplot(ref, dfs, n):
         subplotIndex += 1
 
 
-def cor_spearman_barplot(ref, dfs):
+def cor_spearman_barplot(i_ref_df, progname_to_df_dict):
+
+    assert (
+        i_ref_df.index.name == "intronId"
+    ), "Error, i_ref_df input not indexed on intronId"
+
+    ref_quants = i_ref_df.copy().rename(columns={"tpm": "ref_tpm"})
+
     program_names = []
     program_colors = []
     cor_values = []
-    for df in dfs:
-        program = df.columns[1]
-        program_tuple = colorAndLabel(program)
+    for progname, df in progname_to_df_dict.items():
+
+        assert (
+            df.index.name == "intronId"
+        ), "Error, df for {} not indexed on intronId".format(progname)
+
+        program_tuple = colorAndLabel(progname)
         program_names.append(program_tuple[0])
         program_colors.append(program_tuple[1])
-        program_df = pd.merge(ref, df, how="left", on="intronId").fillna(0)
+        program_df = df[["tpm"]].join(ref_quants, how="right").fillna(0)
         cor_values.append(
-            stat.spearmanr(program_df.iloc[:, 4], program_df.iloc[:, 5]).correlation
+            stat.spearmanr(program_df[["ref_tpm"]], program_df[["tpm"]]).correlation
         )
     plot_df = pd.DataFrame(
         {"name": program_names, "color": program_colors, "cor_value": cor_values}
@@ -801,20 +769,32 @@ def cor_spearman_barplot(ref, dfs):
     fig.show()
 
 
-def cor_pearson_barplot(ref, dfs):
+def cor_pearson_barplot(i_ref_df, progname_to_df_dict):
+
+    assert (
+        i_ref_df.index.name == "intronId"
+    ), "Error, i_ref_df input not indexed on intronId"
+
+    ref_quants = i_ref_df.copy().rename(columns={"tpm": "ref_tpm"})
+
     program_names = []
     program_colors = []
     cor_values = []
-    for df in dfs:
-        program = df.columns[1]
-        program_tuple = colorAndLabel(program)
+
+    for progname, df in progname_to_df_dict.items():
+
+        assert (
+            df.index.name == "intronId"
+        ), "Error, df for {} not indexed on intronId".format(progname)
+
+        program_tuple = colorAndLabel(progname)
         program_names.append(program_tuple[0])
         program_colors.append(program_tuple[1])
-        program_df = pd.merge(ref, df, how="left", on="intronId").fillna(0)
+        program_df = df[["tpm"]].join(ref_quants, how="right").fillna(0)
 
         # Apply log transformation (adding a small constant to avoid log(0))
-        log_col1 = np.log1p(program_df.iloc[:, 4])
-        log_col2 = np.log1p(program_df.iloc[:, 5])
+        log_col1 = np.log1p(program_df["ref_tpm"])
+        log_col2 = np.log1p(program_df["tpm"])
 
         cor_values.append(stat.pearsonr(log_col1, log_col2).statistic)
 
