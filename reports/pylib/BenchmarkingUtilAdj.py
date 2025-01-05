@@ -62,8 +62,7 @@ def intronIds(df):
     intronDict = {}  # Dict; {transcript ID: intron string}.
     transcriptGeneDict = {}
     for i, j in df.iterrows():
-        geneId, txId, nextTx, chrom, strand, start, end = (
-            j["gene_id"],
+        txId, nextTx, chrom, strand, start, end = (
             j["transcript_id"],
             j["next_transcript"],
             j["seqname"],
@@ -72,7 +71,8 @@ def intronIds(df):
             j["end"],
         )
 
-        transcriptGeneDict[txId] = geneId
+        if "gene_id" in j:
+            transcriptGeneDict[txId] = j["gene_id"]
 
         if txId not in intronDict.keys():  # If the exon is the first of the tx,
             intronDict[txId] = (
@@ -100,32 +100,39 @@ def intronIds(df):
     )  # Convert intron dictionary to dataframe.
     intronDf.columns = ["intronId"]
 
-    transcriptGeneDf = pd.DataFrame.from_dict(transcriptGeneDict, orient="index")
-    transcriptGeneDf.columns = ["gene_id"]
-
-    intronDf = intronDf.join(transcriptGeneDf, how="inner")
+    if len(transcriptGeneDict) > 0:
+        transcriptGeneDf = pd.DataFrame.from_dict(transcriptGeneDict, orient="index")
+        transcriptGeneDf.columns = ["gene_id"]
+        intronDf = intronDf.join(transcriptGeneDf, how="left")
 
     intronDf.index.name = "transcript_id"
 
     return intronDf
 
 
-def refCountsWithIntronIds(gtf_filename, quant_tsv):
+def parseGTFtoIntronIDs(gtf_filename):
+
+    # Produce a dataframe of transcript IDs and their new intron string IDs.
+    df_exons = processGtf(gtf_filename)
+    intronDf = intronIds(df_exons)
+
+    intronDf.reset_index(inplace=True)
+
+    return intronDf
+
+
+def parseGTFtoIntronIDsandQuants(gtf_filename, quant_tsv):
     """
     Merge counts with newly assigned intron string IDs.
     - 'gtf': path to GTF.
     - 'tsv': path to TSV of counts.
     """
 
-    # Produce a dataframe of transcript IDs and their new intron string IDs.
-    df_exons = processGtf(gtf_filename)
-    intronDf = intronIds(df_exons)
+    intronDf = parseGTFtoIntronIDs(gtf_filename)
 
-    countDf = getQuantDf(quant_tsv)
+    countDf = parseQuantsTSV(quant_tsv)
 
-    df = intronDf.join(countDf, how="inner")
-
-    df = df.reset_index()
+    df = intronDf.merge(countDf, how="inner", on="transcript_id")
 
     return df
 
@@ -136,8 +143,10 @@ def indexDfByIntronId(df):
 
     agg_operations = {
         "transcript_ids": ("transcript_id", concat),
-        "gene_ids": ("gene_id", concat),
     }
+
+    if "gene_id" in df.columns:
+        agg_operations["gene_ids"] = ("gene_id", concat)
 
     if "tpm" in df.columns:
         agg_operations["tpm"] = ("tpm", "sum")
@@ -147,7 +156,7 @@ def indexDfByIntronId(df):
     return df
 
 
-def getQuantDf(quant_tsv):
+def parseQuantsTSV(quant_tsv):
 
     # Read in a count file and join it to the "intronDf".
     countDf = pd.read_csv(quant_tsv, sep="\t")
@@ -162,57 +171,59 @@ def getQuantDf(quant_tsv):
 
     countDf.columns = ["tpm"]
 
+    countDf.reset_index(inplace=True)
+
     return countDf
 
 
-def countsWithIntronIds(gtf, tsv):
-    """
-    Merge counts with newly assigned intron string IDs.
-    - 'gtf': path to GTF.
-    - 'tsv': path to TSV of counts.
-    """
-
-    # Produce a dataframe of transcript IDs and their new intron string IDs.
-    sampleName = tsv.split("/")[-1].split(".")[0]
-    df_exons = processGtf(gtf)
-    intronDf = intronIds(df_exons, sampleName)
-
-    # Read in a count file and join it to the "intronDf".
-    countDf = pd.read_csv(tsv, sep="\t")
-    colnames = list(countDf.columns.values)
-    countDf = countDf[
-        [colnames[0], colnames[-1]]
-    ]  # colnames[0] = txIds, colnames[-1] = counts.
-    if "flair" in sampleName:  # Slice Flair's weird txIds.
-        countDf[colnames[0]] = countDf[colnames[0]].str[:15]
-    countDf = countDf.groupby(colnames[0]).sum()
-
-    df = pd.concat([intronDf, countDf], axis=1)  # Join the intron ID dataframe to
-    df.columns = ["intronId", "expression"]  # the count dataframe by txIds.
-
-    concat_strings = lambda x: ",".join(x)
-    df = df.reset_index()
-    df = df.groupby("intronId").agg(
-        expression=("expression", "sum"), index=("index", concat_strings)
-    )
-    df = df.reset_index()
-    df = df.set_index("index")
-    df.index.name = None
-    df.columns = ["intronId", sampleName]
-
-    return df
-
-
-def GtfIntronIds(gtf):
-    """Make a dataframe of intron strings for transcripts in a GTF file."""
-
-    # Produce a dataframe of transcript IDs and their new intron string IDs.
-    sampleName = gtf.split("/")[-1].split(".")[0]
-    df_exons = processGtf(gtf)
-    intronDf = intronIds(df_exons, sampleName)
-    intronDf.columns = [sampleName]
-
-    return intronDf
+# def countsWithIntronIds(gtf, tsv):
+#    """
+#    Merge counts with newly assigned intron string IDs.
+#    - 'gtf': path to GTF.
+#    - 'tsv': path to TSV of counts.
+#    """
+#
+#    # Produce a dataframe of transcript IDs and their new intron string IDs.
+#    sampleName = tsv.split("/")[-1].split(".")[0]
+#    df_exons = processGtf(gtf)
+#    intronDf = intronIds(df_exons, sampleName)
+#
+#    # Read in a count file and join it to the "intronDf".
+#    countDf = pd.read_csv(tsv, sep="\t")
+#    colnames = list(countDf.columns.values)
+#    countDf = countDf[
+#        [colnames[0], colnames[-1]]
+#    ]  # colnames[0] = txIds, colnames[-1] = counts.
+#    if "flair" in sampleName:  # Slice Flair's weird txIds.
+#        countDf[colnames[0]] = countDf[colnames[0]].str[:15]
+#    countDf = countDf.groupby(colnames[0]).sum()
+#
+#    df = pd.concat([intronDf, countDf], axis=1)  # Join the intron ID dataframe to
+#    df.columns = ["intronId", "expression"]  # the count dataframe by txIds.
+#
+#    concat_strings = lambda x: ",".join(x)
+#    df = df.reset_index()
+#    df = df.groupby("intronId").agg(
+#        expression=("expression", "sum"), index=("index", concat_strings)
+#    )
+#    df = df.reset_index()
+#    df = df.set_index("index")
+#    df.index.name = None
+#    df.columns = ["intronId", sampleName]
+#
+#    return df
+#
+# def GtfIntronIds(gtf):
+#    """Make a dataframe of intron strings for transcripts in a GTF file."""
+#
+#    # Produce a dataframe of transcript IDs and their new intron string IDs.
+#    sampleName = gtf.split("/")[-1].split(".")[0]
+#    df_exons = processGtf(gtf)
+#    intronDf = intronIds(df_exons, sampleName)
+#
+#    intronDf.columns = [sampleName]
+#
+#    return intronDf
 
 
 def relativeDiff(df, metric):
@@ -595,6 +606,88 @@ def scatterplot(ref, dfs, n):
         bigDf.to_csv(sampleName + ".bigdf.tsv", sep="\t", index=False)
 
     countDict = OrderedDict(sorted(countDict.items()))  # Sort count dictionary by keys
+    subplotIndex = 0  # to index the subplots
+    for program, tpm in countDict.items():  # by program name, alphabetically.
+        groundTruth = tpm[0].copy()
+        estimated = tpm[1].copy()
+        estimated[estimated <= 0.001] = 0.001  # Set all estimated values that are
+        # <= 0.001 to 0.001 to show instances of
+        # undetected transcripts at x = 0.001.
+        color = tpm[2]
+        corr = r"$\rho$ = " + str(round(stat.spearmanr(tpm[1], tpm[0]).correlation, 3))
+        pcorr = "R = " + str(
+            round(stat.pearsonr(np.log(tpm[1] + 1), np.log(tpm[0] + 1)).statistic, 3)
+        )
+
+        ax[subplotIndex].plot(groundTruth, groundTruth, color="red", lw=1)
+        ax[subplotIndex].scatter(estimated, groundTruth, 0.25, c=color, alpha=0.5)
+        ax[subplotIndex].text(0.002, 3000, corr)
+        ax[subplotIndex].text(0.002, 1000, pcorr)
+        ax[subplotIndex].text(0.002, 100, program)
+
+        ax[subplotIndex].set_xlim(0.0005, 10000)
+        ax[subplotIndex].set_ylim(0.1, 10000)
+        ax[subplotIndex].set_yscale("log")
+        ax[subplotIndex].set_xscale("log")
+        ax[subplotIndex].set_xticks([0.001, 0.01, 1, 100, 10000])
+        ax[subplotIndex].set_xticklabels(
+            ["0", r"$10^{-2}$", r"$10^0$", r"$10^2$", r"$10^4$"]
+        )
+        ax[subplotIndex].set_xlabel("estimated TPM")
+        ax[subplotIndex].set_ylabel("ground truth TPM")
+        subplotIndex += 1
+
+
+def scatterplot_adj(i_ref_df, progname_to_df_dict):
+    """
+    Generates side-by-side scatterplots comparing observed and
+    ground truth TPMs from all tools.
+    'ref': reference dataframe
+    'dfs': list of dataframes made with countsWithIntronIds().
+    'n': an integer representing the number of tools being plotted.
+    """
+
+    assert (
+        i_ref_df.index.name == "intronId"
+    ), "Error, i_ref_df input not indexed on intronId"
+
+    ref_quants = i_ref_df.copy().rename(columns={"tpm": "ref_tpm"})
+
+    countDict = {}
+    for progname, df in progname_to_df_dict.items():
+
+        assert (
+            df.index.name == "intronId"
+        ), "Error, df for {} not indexed on intronId".format(progname)
+
+        prog_tpm_colname = progname + "_tpm"
+
+        prog_quants = df[["tpm"]].copy().rename(columns={"tpm": prog_tpm_colname})
+
+        bigDf = prog_quants.join(ref_quants, how="inner").fillna(0)
+        colnames = list(bigDf.columns.values)
+
+        name, c, l = colorAndLabel(progname)
+        for counts in [bigDf["ref_tpm"], bigDf[prog_tpm_colname]]:
+            counts = counts.astype(
+                float
+            )  # Convert ground truth & estimated counts to float type.
+            counts = (counts / np.sum(counts)) * 1000000  # Re-normalize to TPMs.
+
+        groundTruth = np.array(bigDf["ref_tpm"])
+        estimated = np.array(bigDf[prog_tpm_colname])
+        countDict[name] = [groundTruth, estimated, c]  # Append counts to a dictionary.
+
+        bigDf.copy().reset_index().to_csv(
+            progname + ".ref_quant_compare.tsv", sep="\t", index=False
+        )
+
+    countDict = OrderedDict(sorted(countDict.items()))  # Sort count dictionary by keys
+
+    # Define figure and panel dimensions
+    n = len(progname_to_df_dict)
+    fig, ax = plt.subplots(1, n, figsize=(2.7 * n, 2.69), tight_layout=True)
+
     subplotIndex = 0  # to index the subplots
     for program, tpm in countDict.items():  # by program name, alphabetically.
         groundTruth = tpm[0].copy()
