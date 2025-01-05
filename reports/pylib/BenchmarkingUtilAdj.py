@@ -322,7 +322,7 @@ def measure_rel_diff_by_expr_quantile(
     if intronIds_use is None:
         i_bigDf["use"] = i_bigDf["is_ref"]
     else:
-        i_bigDf[intronIds_use, "use"] = True
+        i_bigDf.loc[intronIds_use, "use"] = True
 
     # 'knownDf': the subset of tx that were included in the downsampled GTF.
     i_use_df = i_bigDf[i_bigDf["use"]].copy()
@@ -1211,7 +1211,7 @@ def singleDownsampledErrorPlot(ref, dfs, n, errorType, downsamplePercentage):
 
 
 def rel_diff_vs_expr_percentile_plot(
-    i_ref_df, progname_to_df_dict, num_bins, errorType, plot_title
+    i_ref_df, progname_to_df_dict, num_bins, errorType, plot_title, intron_ids_use=None
 ):
     """
     Generates an error plot for one specific downsampled percentage.
@@ -1272,8 +1272,11 @@ def rel_diff_vs_expr_percentile_plot(
 
     errorAnnotations = []
     for progname, i_sample_df in progname_to_df_dict.items():
+
+        ###################################
+        ## Mesaure the relative differences
         rel_diffs, sidebarError = measure_rel_diff_by_expr_quantile(
-            i_ref_df, i_sample_df, errorType, num_bins
+            i_ref_df, i_sample_df, errorType, num_bins, intron_ids_use
         )
         name, c, l = colorAndLabel(progname)
         # Assign the sample to its respective panels based on downsample %.
