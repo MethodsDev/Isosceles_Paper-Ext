@@ -121,7 +121,9 @@ def parseGTFtoIntronIDs(gtf_filename):
     return intronDf
 
 
-def parseGTFtoIntronIDsandQuants(gtf_filename, quant_tsv):
+def parseGTFtoIntronIDsandQuants(
+    gtf_filename, quant_tsv, transcript_id_modifier_func=None
+):
     """
     Merge counts with newly assigned intron string IDs.
     - 'gtf': path to GTF.
@@ -131,6 +133,14 @@ def parseGTFtoIntronIDsandQuants(gtf_filename, quant_tsv):
     intronDf = parseGTFtoIntronIDs(gtf_filename)
 
     countDf = parseQuantsTSV(quant_tsv)
+
+    if transcript_id_modifier_func is not None:
+        intronDf["transcript_id"] = intronDf["transcript_id"].apply(
+            transcript_id_modifier_func
+        )
+        countDf["transcript_id"] = countDf["transcript_id"].apply(
+            transcript_id_modifier_func
+        )
 
     df = intronDf.merge(countDf, how="inner", on="transcript_id")
 
@@ -226,24 +236,24 @@ def parseQuantsTSV(quant_tsv):
 #    return intronDf
 
 
-def relativeDiff(df, metric):
+def relativeDiff(ground_truth_TPMs, estimated_TPMs, metric):
     """
     Calculate absolute relative difference between ground truth
     and estimated quantifications.  Metric: 'mean' or 'median'.
     """
 
-    x = np.array(df.iloc[:, 4])  # Ground truth TPMs.
-    y = np.array(df.iloc[:, 5])  # Estimated TPMs.
+    x = np.array(ground_truth_TPMs)  # Ground truth TPMs.
+    y = np.array(estimated_TPMs)  # Estimated TPMs.
 
     if metric == "mean":
         return np.mean(abs(x - y) / ((x + y) / 2))
     elif metric == "median":
         return np.median(abs(x - y) / ((x + y) / 2))
     else:
-        print("Specify 'mean' or 'median' for argument: 'metric'.")
+        raise RuntimeError("Specify 'mean' or 'median' for argument: 'metric'.")
 
 
-def prepareBinnedData(ref, sampleDf, n):
+def assign_binned_expr_quantile(i_ref_df, i_sample_df, num_bins):
     """
     Takes a reference dataframe, outer-joins it to a sample's counts
     and then bins the dataframe based on ground truth TPMs.
@@ -251,31 +261,33 @@ def prepareBinnedData(ref, sampleDf, n):
 
     # Outer join the sample counts to the reference dataframe by intron string ID.
     # bigDf's column 4 is ground truth TPMs and column 5 is the sample's estimated TPMs.
-    bigDf = pd.merge(ref, sampleDf, how="outer", on="intronId").fillna(0)
-    colnames = list(bigDf.columns.values)
-    sampleName = bigDf.columns[-1]
-    # 'downPercentage': the downsampled percentage, see note above about file naming conventions.
-    downPercentage = sampleName.split("down")[1][0:2]
-    # 'downCol': the column representing the downsampled annotation.
-    downCol = [col for col in colnames[0:3] if str(downPercentage) in col][0]
-    for counts in [bigDf[colnames[4]], bigDf[colnames[5]]]:
+    bigDf = (
+        i_ref_df[["tpm"]]
+        .copy()
+        .rename(columns={"tpm": "ref_tpm"})
+        .join(i_sample_df, how="outer")
+        .fillna(0)
+    )
+
+    for counts in [bigDf["ref_tpm"], bigDf["tpm"]]:
         counts = counts.astype(
             float
         )  # Convert ground truth & estimated counts to float type.
         counts = (counts / np.sum(counts)) * 1000000  # Re-normalize to TPMs.
-    groundTruth = colnames[4]
-    estimated = colnames[5]
+
+    groundTruth = "ref_tpm"
+    estimated = "tpm"
     # Remove any rows in which both ground truth and estimated TPM is 0.
     dropRows = bigDf[(bigDf[groundTruth] == 0) & (bigDf[estimated] == 0)].index
     bigDf.drop(dropRows, inplace=True)
     # Subset bigDf for rows where ground truth is 0; these are all false positives in the sample.
     zeros = bigDf[bigDf[groundTruth] == 0].copy()
     # Subset bigDf for rows where ground truth isn't 0, then order them by ground truth expression.
-    nonzeros = bigDf[bigDf[groundTruth] > 0].sort_values(by=[colnames[4]]).copy()
+    nonzeros = bigDf[bigDf[groundTruth] > 0].sort_values(by=[groundTruth]).copy()
     # Bin the data into n bins based on ground truth expression.
     # .rank(method='first') is required because otherwise we have issues with nonunique bin edge values.
     nonzeros["quantile"] = pd.qcut(
-        nonzeros[colnames[4]].rank(method="first"), q=n, labels=False
+        nonzeros[groundTruth].rank(method="first"), q=num_bins, labels=False
     )
     # Assign false positives to bins based on their detected expression
     quantile_expr = nonzeros[groundTruth].groupby(nonzeros["quantile"]).agg("max")
@@ -290,7 +302,63 @@ def prepareBinnedData(ref, sampleDf, n):
     # true and false positives is to ensure that the first quantile bin isn't all zeros for ground truth.
     bigDf = zeros.append(nonzeros)
 
-    return bigDf, downCol, sampleName
+    return bigDf
+
+
+def measure_rel_diff_by_expr_quantile(
+    i_ref_df, i_sample_df, errorType, num_bins, intronIds_use=None
+):
+    """Calculate and plot error metrics for a given sample."""
+    i_bigDf = assign_binned_expr_quantile(i_ref_df, i_sample_df, num_bins)
+
+    # incorporate into the i_bigDf an indicator of a reference intron set.
+    i_ref_introns = i_ref_df.copy()
+    i_ref_introns["is_ref"] = True
+    i_ref_introns = i_ref_introns[["is_ref"]]
+    i_bigDf = i_bigDf.join(i_ref_introns)
+    i_bigDf["is_ref"] = i_bigDf["is_ref"].fillna(False)
+
+    i_bigDf["use"] = False  # init
+    if intronIds_use is None:
+        i_bigDf["use"] = i_bigDf["is_ref"]
+    else:
+        i_bigDf[intronIds_use, "use"] = True
+
+    # 'knownDf': the subset of tx that were included in the downsampled GTF.
+    i_use_df = i_bigDf[i_bigDf["use"]].copy()
+    knownGroundTruth = np.array(i_use_df["ref_tpm"])
+    knownEstimated = np.array(i_use_df["tpm"])
+
+    # Calculate the heights of the horizontal marks in the sidebar which denote either
+    # the median or the mean of the big picture of counts in annotated/all transcripts.
+    sidebarError = None
+    if errorType == "mean":
+        meanRD = relativeDiff(knownGroundTruth, knownEstimated, "mean")
+        sidebarError = meanRD
+    elif errorType == "median":
+        medianRD = relativeDiff(knownGroundTruth, knownEstimated, "median")
+        sidebarError = medianRD
+    else:
+        raise RuntimeError("Specify 'mean' or 'median' for argument: 'errorType'.")
+
+    # Calculate error for each quantile, 0 to n - 1.
+    # Each error value represents the error for its quantile bin, 'i'
+    # and is stored in a list (knownError or allError) to be plotted later.
+
+    relDiffs = []
+    for i in range(num_bins):
+        i_quantile_df = i_use_df[i_use_df["quantile"] == i]
+
+        if errorType == "mean":
+            relDiffs.append(
+                relativeDiff(i_quantile_df["ref_tpm"], i_quantile_df["tpm"], "mean")
+            )
+        else:
+            relDiffs.append(
+                relativeDiff(i_quantile_df["ref_tpm"], i_quantile_df["tpm"], "median")
+            )
+
+    return relDiffs, sidebarError
 
 
 def measureError(ref, sampleDf, errorType, n):
@@ -815,22 +883,43 @@ def cor_pearson_barplot(i_ref_df, progname_to_df_dict):
     fig.show()
 
 
-def rel_diff_barplot(ref, dfs, relDiffType):
+def rel_diff_barplot(i_ref_df, progname_to_df_dict, relDiffType):
+
+    assert (
+        i_ref_df.index.name == "intronId"
+    ), "Error, i_ref_df input not indexed on intronId"
+
+    ref_quants = i_ref_df.copy().rename(columns={"tpm": "ref_tpm"})
+
     program_names = []
     program_colors = []
     rel_diffs = []
     median_rel_diffs = []
-    for df in dfs:
-        program = df.columns[1]
-        program_tuple = colorAndLabel(program)
+
+    for progname, df in progname_to_df_dict.items():
+
+        assert (
+            df.index.name == "intronId"
+        ), "Error, df for {} not indexed on intronId".format(progname)
+
+        program_tuple = colorAndLabel(progname)
         program_names.append(program_tuple[0])
         program_colors.append(program_tuple[1])
-        program_df = pd.merge(ref, df, how="left", on="intronId").fillna(0)
-        rel_diffs.append(relativeDiff(program_df, relDiffType))
-        median_rel_diffs.append(relativeDiff(program_df, "median"))
-        df2 = program_df.copy()
-        df2[relDiffType] = relativeDiff(program_df, relDiffType)
-        df2.to_csv(program + "." + relDiffType + ".relDiff.tsv", sep="\t", index=False)
+
+        program_df = df[["tpm"]].join(ref_quants[["ref_tpm"]], how="right").fillna(0)
+
+        prog_rel_diffs = relativeDiff(
+            program_df["ref_tpm"], program_df["tpm"], relDiffType
+        )
+
+        rel_diffs.append(prog_rel_diffs)
+        median_rel_diffs.append(
+            relativeDiff(program_df["ref_tpm"], program_df["tpm"], "median")
+        )
+
+        df2 = i_ref_df.copy()
+        df2[relDiffType] = prog_rel_diffs
+        df2.to_csv(progname + "." + relDiffType + ".relDiff.tsv", sep="\t", index=False)
 
     plot_df = pd.DataFrame(
         {
@@ -1119,6 +1208,126 @@ def singleDownsampledErrorPlot(ref, dfs, n, errorType, downsamplePercentage):
         )
 
     panel1.legend(loc="center left", bbox_to_anchor=(2.5, 0.5), frameon=False)
+
+
+def rel_diff_vs_expr_percentile_plot(
+    i_ref_df, progname_to_df_dict, num_bins, errorType, plot_title
+):
+    """
+    Generates an error plot for one specific downsampled percentage.
+    'ref': The reference dataframe of intron string IDs and ground truth counts.
+    'dfs': a list of sample dataframes from getFiles().
+    'n': an integer representing the number of bins to stratify by.
+    'errorType': 'median' or 'mean'.
+    'downsamplePercentage': a 2-character integer representing the downsample % of interest.
+    """
+
+    tickRange = percentileTicks(num_bins)
+
+    figureWidth = 5
+    figureHeight = 4.3
+    panelWidth = 3.2
+    panelHeight = 3
+    relativePanelWidth = panelWidth / figureWidth
+    relativePanelHeight = panelHeight / figureHeight
+    plt.figure(figsize=(figureWidth, figureHeight))
+
+    panel = plt.axes([0.8 / 11, 2.4 / 11, relativePanelWidth, relativePanelHeight])
+    panel.set_title(plot_title, fontsize=10.0)
+    panel.set_xlabel("Ground truth\nexpression percentile", fontsize=10.0)
+
+    panel.set_xticks([0, 25, 50, 75, 99])
+    panel.set_xlim(0, 108)
+    panel.set_ylim(0, 2.1)
+    panel.vlines(x=99.1, ymin=0, ymax=2.1, color="black", linewidth=1, zorder=5)
+    rectangle = mplpatches.Rectangle(
+        (99.3, 0.05), 107.5 - 99.3, 1.12, color="white", zorder=3
+    )
+    panel.add_patch(rectangle)
+
+    if errorType == "median":
+        panel.set_ylabel("Median rel. diff.", fontsize=10.0)
+
+        panel.set_xticks([0, 25, 50, 75, 99])
+        panel.set_xlim(0, 108)
+        panel.set_ylim(0, 2.1)
+        panel.vlines(x=99.1, ymin=0, ymax=2.1, color="black", linewidth=1, zorder=5)
+        rectangle = mplpatches.Rectangle(
+            (99.3, 0.05), 107.5 - 99.3, 1.12, color="white", zorder=3
+        )
+        panel.add_patch(rectangle)
+
+    elif errorType == "mean":
+        panel.set_ylabel("Mean rel. diff.", fontsize=10.0)
+        panel.set_xticks([0, 25, 50, 75, 99])
+        panel.set_xlim(0, 108)
+        panel.set_ylim(0, 2.1)
+        panel.vlines(x=99.1, ymin=0, ymax=2.1, color="black", linewidth=1, zorder=5)
+        rectangle = mplpatches.Rectangle(
+            (99.3, 0.05), 107.5 - 99.3, 1.12, color="white", zorder=3
+        )
+        panel.add_patch(rectangle)
+    else:
+        raise RuntimeError("Specify 'mean' or 'median' for argument: 'errorType'.")
+
+    errorAnnotations = []
+    for progname, i_sample_df in progname_to_df_dict.items():
+        rel_diffs, sidebarError = measure_rel_diff_by_expr_quantile(
+            i_ref_df, i_sample_df, errorType, num_bins
+        )
+        name, c, l = colorAndLabel(progname)
+        # Assign the sample to its respective panels based on downsample %.
+
+        # Plot the error line and sidebar error.
+        panel.plot(
+            tickRange,
+            rel_diffs,
+            marker="None",
+            alpha=0.8,
+            markersize=1,
+            color=c,
+            label=progname,
+        )
+        panel.hlines(
+            y=sidebarError,
+            xmin=99.1,
+            xmax=107.9,
+            color=c,
+            linewidth=1.5,
+            zorder=4,
+        )
+        # Add info for sidebar error value annotation to be added later.
+        errorAnnotations.append(
+            [
+                name,
+                c,
+                str("{0:.2f}".format(round(sidebarError, 2))),
+            ]
+        )
+    # Add the second x axis
+    ax2 = panel.twiny()
+    ax2.set_xlim(0, 108)
+    ax2.set_xticks([0, 30, 66, 93])
+    ax2.set_xticklabels(["$10^{-1}$", "$10^0$", "$10^1$", "$10^2$"])
+    ax2.tick_params(axis="x", which="major", labelsize=8)
+
+    # Sort the sidebar error value by panel number and sample name.
+    errorAnnotations = sorted(errorAnnotations, key=lambda x: x[0])
+
+    # initial height, 'h', and incremental decline, 'j', must be adjusted to fit the number of
+    # samples in the comparison and will be dependent on the y-axis range.
+    if errorType == "median":
+        h = 0.55
+        j = 0.10
+    elif errorType == "mean":
+        h = 0.55
+        j = 0.10
+    # Plot the sidebar error value as a text annotation in the bottom left-hand corner.
+    for i in range(len(errorAnnotations)):
+        label, color, err = errorAnnotations[i]
+        panel.annotate(err, (2.5, h - j * i), size=6, color=color)
+
+    panel.legend(loc="center left", bbox_to_anchor=(2.5, 0.5), frameon=False)
 
 
 def sensitivityPlot(ref, dfs, n, is_best):
