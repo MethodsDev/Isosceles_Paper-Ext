@@ -456,8 +456,13 @@ def precision(df):
     # Equation for Precision: PPV = TP / (FP + TP).
     # TP is any instance of a transcript with TPM > 0 in both ground truth & estimated.
     # FP is any instance of a transcript with TPM > 0 in only estimated but not ground truth.
-    TP = np.sum((df.iloc[:, 5] != 0) & (df.iloc[:, 4] != 0))
-    FP = np.sum((df.iloc[:, 5] != 0) & (df.iloc[:, 4] == 0))
+
+    # TP = np.sum((df.iloc[:, 5] != 0) & (df.iloc[:, 4] != 0))
+    # FP = np.sum((df.iloc[:, 5] != 0) & (df.iloc[:, 4] == 0))
+
+    TP = np.sum((df["class"] == "TP"))
+    FP = np.sum((df["class"] == "FP"))
+
     if FP + TP != 0:
         PPV = TP / (FP + TP)
     else:
@@ -472,9 +477,15 @@ def f1_score(df):
     # TP is any instance of a transcript with TPM > 0 in both ground truth & estimated.
     # FP is any instance of a transcript with TPM > 0 in only estimated but not ground truth.
     # FN is any instance of a transcript with TPM > 0 in only ground truth but not estimated.
-    TP = np.sum((df.iloc[:, 5] != 0) & (df.iloc[:, 4] != 0))
-    FP = np.sum((df.iloc[:, 5] != 0) & (df.iloc[:, 4] == 0))
-    FN = np.sum((df.iloc[:, 5] == 0) & (df.iloc[:, 4] != 0))
+
+    # TP = np.sum((df.iloc[:, 5] != 0) & (df.iloc[:, 4] != 0))
+    # FP = np.sum((df.iloc[:, 5] != 0) & (df.iloc[:, 4] == 0))
+    # FN = np.sum((df.iloc[:, 5] == 0) & (df.iloc[:, 4] != 0))
+
+    TP = np.sum((df["class"] == "TP"))
+    FP = np.sum((df["class"] == "FP"))
+    FN = np.sum((df["class"] == "FN"))
+
     F1 = 2 * TP / (2 * TP + FP + FN)
 
     return F1
@@ -565,7 +576,21 @@ def calc_TP_FP_FN(i_ref_df, i_sample_df):
     return i_merged_df
 
 
-def calc_accuracy_stats_for_quantiles(
+def calc_TP_FP_FN_and_expr_quantiles(i_ref_df, i_sample_df, num_bins):
+
+    # calc TP, FP, and FN
+    i_sample_TP_FP_FN_df = calc_TP_FP_FN(i_ref_df, i_sample_df)
+
+    # incorporate the expr quantiles info
+    i_expr_quantiles = assign_binned_expr_quantile(i_ref_df, i_sample_df, num_bins)
+    i_sample_TP_FP_FN_df = i_sample_TP_FP_FN_df.join(
+        i_expr_quantiles["quantile"], how="left"
+    )
+
+    return i_sample_TP_FP_FN_df
+
+
+def calc_knownTPR_novelTPR_and_FDR_for_quantiles(
     i_sample_TP_FP_FN_df, num_bins, novel_intron_ids=None
 ):
 
@@ -629,6 +654,48 @@ def measureOverallStats(ref, sampleDf, n):
     meanStats = [np.mean(allTPR), np.mean(allF1), np.mean(allPPV)]
 
     return statistics, meanStats, downCol, sampleName
+
+
+def calc_TPR_F1_PPV_for_quantiles(i_sample_TP_FP_FN_df, num_bins, novel_intron_ids):
+    """Calculate TP, FP and FN to get Sensitivty, F1 Score and Precision of a sample."""
+
+    novel_introns = set()
+    if novel_intron_ids is not None:
+        novel_introns.update(novel_intron_ids)
+
+    # Calculate TPR and FDR for each quantile bin 'i'.
+    allTPR = []
+    allF1 = []
+    allPPV = []
+
+    # Subset each dataframe for rows in quantile bin 'i'.
+    for i in range(num_bins):
+        subBigDf = i_sample_TP_FP_FN_df[i_sample_TP_FP_FN_df["quantile"] == i]
+
+        if novel_intron_ids is not None:
+            introns_in_quantile = set(subBigDf.index.values)
+            novel_introns_in_quantile = introns_in_quantile & novel_introns
+            if len(novel_introns_in_quantile) > 0:
+                FPs_df = subBigDf[subBigDf["class"] == "FP"]
+                subBigDf = subBigDf.loc[novel_introns_in_quantile, :]
+                # above would only incorporate TP and FNs according to the novel intron ids.
+                # must incorporate all the FPs too
+                subBigDf = pd.concat([subBigDf, FPs_df])
+
+        sensitivity_val = sensitivity(subBigDf) if len(subBigDf) > 0 else np.nan
+        allTPR.append(sensitivity_val)
+
+        # Measure de novo detection metrics and append to lists.
+        F1_val = f1_score(subBigDf) if len(subBigDf) > 0 else np.nan
+        allF1.append(F1_val)
+
+        PPV_val = precision(subBigDf) if len(subBigDf) > 0 else np.nan
+        allPPV.append(PPV_val)
+
+    statistics = [allTPR, allF1, allPPV]
+    meanStats = [np.mean(allTPR), np.mean(allF1), np.mean(allPPV)]
+
+    return statistics, meanStats
 
 
 def colorAndLabel(sampleName, is_best=False):
@@ -1687,16 +1754,12 @@ def IsoformIdentificationSensitivityPlot(
 
     for progname, i_sample_df in progname_to_df_dict.items():
 
-        # calc TP, FP, and FN
-        i_sample_TP_FP_FN_df = calc_TP_FP_FN(i_ref_df, i_sample_df)
-
-        # incorporate the expr quantiles info
-        i_expr_quantiles = assign_binned_expr_quantile(i_ref_df, i_sample_df, num_bins)
-        i_sample_TP_FP_FN_df = i_sample_TP_FP_FN_df.join(
-            i_expr_quantiles["quantile"], how="left"
+        # calc TP, FP, and FN and incorporate the expr quantiles info
+        i_sample_TP_FP_FN_df = calc_TP_FP_FN_and_expr_quantiles(
+            i_ref_df, i_sample_df, num_bins
         )
 
-        statistics, meanStats = calc_accuracy_stats_for_quantiles(
+        statistics, meanStats = calc_knownTPR_novelTPR_and_FDR_for_quantiles(
             i_sample_TP_FP_FN_df, num_bins, novel_intron_ids
         )
 
@@ -1899,6 +1962,107 @@ def singleDownsampledOverallStatsPlot(ref, dfs, n, downsamplePercentage, is_best
             panels = [panel1, panel2, panel3]
         else:
             continue
+
+        # Plot the error line and sidebar error.
+        for i in range(len(panels)):
+            panels[i].plot(
+                tickRange,
+                statistics[i],
+                marker="None",
+                alpha=0.8,
+                markersize=1,
+                color=c,
+                linestyle=l,
+                label=name,
+            )
+            panels[i].hlines(
+                y=meanStats[i],
+                xmin=99.1,
+                xmax=107.9,
+                color=c,
+                linestyle=l,
+                linewidth=1.5,
+                zorder=4,
+            )
+            # Add the second x axis
+            ax2 = panels[i].twiny()
+            ax2.set_xlim(0, 108)
+            ax2.set_xticks([0, 30, 66, 93])
+            ax2.set_xticklabels(["$10^{-1}$", "$10^0$", "$10^1$", "$10^2$"])
+            ax2.tick_params(axis="x", which="major", labelsize=8)
+
+    panel1.legend(loc="center left", bbox_to_anchor=(3.85, 0.5), frameon=False)
+
+
+def TPR_F1_PPV_plot(
+    i_ref_df,
+    progname_to_df_dict,
+    num_bins,
+    errorType,
+    plot_title,
+    novel_intron_ids=None,
+):
+    """
+    Generates an overall stats plot for one specific downsampled percentage.
+    'ref': The reference dataframe of intron string IDs and ground truth counts.
+    'dfs': a list of sample dataframes from getFiles().
+    'n': an integer representing the number of bins to stratify by.
+    'downsamplePercentage': a 2-character integer representing the downsample % of interest.
+    'is_best': a boolean value affecting the style of plotted lines.
+    """
+
+    tickRange = percentileTicks(num_bins)
+
+    figureWidth = 12
+    figureHeight = 3
+    panelWidth = 2.2
+    panelHeight = 2
+    relativePanelWidth = panelWidth / figureWidth
+    relativePanelHeight = panelHeight / figureHeight
+    plt.figure(figsize=(figureWidth, figureHeight))
+
+    panel1 = plt.axes([0.6 / 11, 1.8 / 11, relativePanelWidth, relativePanelHeight])
+    panel1.set_ylim(0.0, 1.1)
+    panel1.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    rectangle = mplpatches.Rectangle((99.3, 0.05), 8.2, 0.9, color="white", zorder=3)
+    panel1.add_patch(rectangle)
+    panel1.set_title("All transcripts", fontsize=10.0)
+    panel1.set_ylabel("Sensitivity (TPR)", fontsize=10.0)
+    panel2 = plt.axes([3.4 / 11, 1.8 / 11, relativePanelWidth, relativePanelHeight])
+    panel2.set_title("All transcripts", fontsize=10.0)
+    panel2.set_ylabel("F1 Score", fontsize=10.0)
+    panel2.set_xlabel(r"Ground truth expression percentile", fontsize=10.0)
+    panel2.set_ylim(0.0, 1.1)
+    panel2.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    rectangle = mplpatches.Rectangle((99.3, 0.05), 8.2, 0.55, color="white", zorder=3)
+    panel2.add_patch(rectangle)
+    panel3 = plt.axes([6.2 / 11, 1.8 / 11, relativePanelWidth, relativePanelHeight])
+    panel3.set_title("All transcripts", fontsize=10.0)
+    panel3.set_ylabel("Precision (PPV)", fontsize=10.0)
+    panel3.set_ylim(0.0, 1.1)
+    panel3.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    rectangle = mplpatches.Rectangle((99.3, 0.05), 8.2, 0.5, color="white", zorder=3)
+    panel1.add_patch(rectangle)
+
+    panels = [panel1, panel2, panel3]
+
+    for panel in panels:
+        panel.set_xlim(0, 108)
+        panel.set_xticks([0, 25, 50, 75, 99])
+        panel.vlines(x=99.1, ymin=-1, ymax=1.1, color="black", linewidth=1, zorder=5)
+
+    for progname, i_sample_df in progname_to_df_dict.items():
+
+        # calc TP, FP, and FN and incorporate the expr quantiles info
+        i_sample_TP_FP_FN_df = calc_TP_FP_FN_and_expr_quantiles(
+            i_ref_df, i_sample_df, num_bins
+        )
+
+        statistics, meanStats = calc_TPR_F1_PPV_for_quantiles(
+            i_sample_TP_FP_FN_df, num_bins, novel_intron_ids
+        )
+
+        name, c, l = colorAndLabel(progname)
 
         # Plot the error line and sidebar error.
         for i in range(len(panels)):
