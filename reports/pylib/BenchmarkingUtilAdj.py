@@ -461,22 +461,40 @@ def calc_knownTPR_novelTPR_and_FDR_for_quantiles(
     for i in range(num_bins):
         subBigDf = i_sample_TP_FP_FN_df[i_sample_TP_FP_FN_df["quantile"] == i]
 
-        sensitivity_known = sensitivity(subBigDf)
-        knownTPR.append(sensitivity_known)
+        stats_quantile_i = calc_accuracy_stats_for_TP_FP_FN_df(subBigDf)
 
-        sensitivity_novel = 0
-        if novel_intron_ids is not None:
+        # fdr based on full df
+        fdr_val = stats_quantile_i["FDR"]
+        novelFDR.append(fdr_val)
+
+        sensitivity_known = stats_quantile_i["Sensitivity"]
+
+        if novel_intron_ids is None:
+            # sensitivity known based on all ref transcripts.
+            sensitivity_novel = 0
+            novelTPR.append(sensitivity_novel)
+
+        else:
+            sensitivity_novel = 0  # init
             introns_in_quantile = set(subBigDf.index.values)
             novel_introns_in_quantile = introns_in_quantile & novel_introns
+            not_novel_introns_in_quantile = (
+                introns_in_quantile - novel_introns_in_quantile
+            )
             if len(novel_introns_in_quantile) > 0:
-                sensitivity_novel = sensitivity(
+                novel_stats_quantile_i = calc_accuracy_stats_for_TP_FP_FN_df(
                     subBigDf.loc[novel_introns_in_quantile, :]
                 )
+                sensitivity_novel = novel_stats_quantile_i["Sensitivity"]
+                novelTPR.append(sensitivity_novel)
 
-        novelTPR.append(sensitivity_novel)
+                # redo known sensitivity value based on the non-novel introns.
+                not_novel_stats_quantile_i = calc_accuracy_stats_for_TP_FP_FN_df(
+                    subBigDf.loc[not_novel_introns_in_quantile, :]
+                )
+                sensitivity_known = not_novel_stats_quantile_i["Sensitivity"]
 
-        fdr_val = fdr(subBigDf)
-        novelFDR.append(fdr_val)
+        knownTPR.append(sensitivity_known)
 
     statistics = [knownTPR, novelTPR, novelFDR]
     meanStats = [np.mean(knownTPR), np.mean(novelTPR), np.mean(novelFDR)]
@@ -1089,16 +1107,24 @@ def IsoformIdentificationSensitivityPlot(
     panel1.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
     rectangle = mplpatches.Rectangle((99.3, 0.05), 8.2, 0.9, color="white", zorder=3)
     panel1.add_patch(rectangle)
-    panel1.set_title("Annotated transcripts", fontsize=10.0)
+    title1 = (
+        "All ref trans (annot&unannot)"
+        if novel_intron_ids is None
+        else "Annotated trans subset"
+    )
+    panel1.set_title(title1, fontsize=10.0)
     panel1.set_ylabel("Sensitivity (TPR)", fontsize=10.0)
+
     panel2 = plt.axes([3.4 / 11, 1.8 / 11, relativePanelWidth, relativePanelHeight])
-    panel2.set_title("Unannotated transcripts", fontsize=10.0)
+    title2 = "empty" if novel_intron_ids is None else "Unannotated trans subset"
+    panel2.set_title(title2, fontsize=10.0)
     panel2.set_ylabel("Sensitivity (TPR)", fontsize=10.0)
     panel2.set_xlabel(r"Ground truth expression percentile", fontsize=10.0)
     panel2.set_ylim(-0.025, 1.1)
     panel2.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
     rectangle = mplpatches.Rectangle((99.3, 0.05), 8.2, 0.55, color="white", zorder=3)
     panel2.add_patch(rectangle)
+
     panel3 = plt.axes([6.2 / 11, 1.8 / 11, relativePanelWidth, relativePanelHeight])
     panel3.set_title("All detected transcripts", fontsize=10.0)
     panel3.set_ylabel("False Discovery Rate (FDR)", fontsize=10.0)
@@ -1305,10 +1331,27 @@ def overall_knownTPR_novelTPR_and_FDR_barplot(
         i_sample_TP_FP_FN_df = calc_TP_FP_FN(i_ref_df, i_sample_df)
 
         accuracy_stats = calc_accuracy_stats_for_TP_FP_FN_df(i_sample_TP_FP_FN_df)
+
+        FDR_val = accuracy_stats["FDR"]
+        sensitivity_val = accuracy_stats["Sensitivity"]
+        novel_trans_sensitivity = np.nan
+
         if novel_intron_ids is not None:
+            novel_intron_ids = set(novel_intron_ids)
             accuracy_stats_for_novel = calc_accuracy_stats_for_TP_FP_FN_df(
                 i_sample_TP_FP_FN_df, novel_intron_ids
             )
+            novel_trans_sensitivity = accuracy_stats_for_novel["Sensitivity"]
+
+            # redo sensitivity_val calc based on the non-novel introns.
+            not_novel_intron_ids = (
+                set(i_sample_TP_FP_FN_df.index.values) - novel_intron_ids
+            )
+
+            not_novel_accuracy_stats = calc_accuracy_stats_for_TP_FP_FN_df(
+                i_sample_TP_FP_FN_df.loc[not_novel_intron_ids, :]
+            )
+            sensitivity_val = not_novel_accuracy_stats["Sensitivity"]
 
         name, color, line = colorAndLabel(progname)
         opacity = 1.0
@@ -1321,7 +1364,7 @@ def overall_knownTPR_novelTPR_and_FDR_barplot(
                 opacity,
                 progname,
                 "knownTPR",
-                accuracy_stats["Sensitivity"],
+                sensitivity_val,
             )
         )
         df_data.append(
@@ -1332,11 +1375,7 @@ def overall_knownTPR_novelTPR_and_FDR_barplot(
                 opacity,
                 progname,
                 "novelTPR",
-                (
-                    accuracy_stats_for_novel["Sensitivity"]
-                    if novel_intron_ids is not None
-                    else np.nan
-                ),
+                novel_trans_sensitivity,
             )
         )
         df_data.append(
@@ -1347,7 +1386,7 @@ def overall_knownTPR_novelTPR_and_FDR_barplot(
                 opacity,
                 progname,
                 "novelFDR",
-                accuracy_stats["FDR"],
+                FDR_val,
             )
         )
     df = pd.DataFrame(
