@@ -656,7 +656,7 @@ def measureOverallStats(ref, sampleDf, n):
     return statistics, meanStats, downCol, sampleName
 
 
-def calc_TPR_F1_PPV_for_quantiles(i_sample_TP_FP_FN_df, num_bins, novel_intron_ids):
+def calc_TPR_PPV_F1_for_quantiles(i_sample_TP_FP_FN_df, num_bins, novel_intron_ids):
     """Calculate TP, FP and FN to get Sensitivty, F1 Score and Precision of a sample."""
 
     novel_introns = set()
@@ -665,8 +665,8 @@ def calc_TPR_F1_PPV_for_quantiles(i_sample_TP_FP_FN_df, num_bins, novel_intron_i
 
     # Calculate TPR and FDR for each quantile bin 'i'.
     allTPR = []
-    allF1 = []
     allPPV = []
+    allF1 = []
 
     # Subset each dataframe for rows in quantile bin 'i'.
     for i in range(num_bins):
@@ -692,8 +692,8 @@ def calc_TPR_F1_PPV_for_quantiles(i_sample_TP_FP_FN_df, num_bins, novel_intron_i
         PPV_val = precision(subBigDf) if len(subBigDf) > 0 else np.nan
         allPPV.append(PPV_val)
 
-    statistics = [allTPR, allF1, allPPV]
-    meanStats = [np.mean(allTPR), np.mean(allF1), np.mean(allPPV)]
+    statistics = [allTPR, allPPV, allF1]
+    meanStats = [np.mean(allTPR), np.mean(allPPV), np.mean(allF1)]
 
     return statistics, meanStats
 
@@ -2026,23 +2026,25 @@ def TPR_F1_PPV_plot(
     panel1.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
     rectangle = mplpatches.Rectangle((99.3, 0.05), 8.2, 0.9, color="white", zorder=3)
     panel1.add_patch(rectangle)
-    panel1.set_title("All transcripts", fontsize=10.0)
+    panel1.set_title(plot_title, fontsize=10.0)
     panel1.set_ylabel("Sensitivity (TPR)", fontsize=10.0)
+
     panel2 = plt.axes([3.4 / 11, 1.8 / 11, relativePanelWidth, relativePanelHeight])
-    panel2.set_title("All transcripts", fontsize=10.0)
-    panel2.set_ylabel("F1 Score", fontsize=10.0)
+    panel2.set_title(plot_title, fontsize=10.0)
+    panel2.set_ylabel("Precision (PPV)", fontsize=10.0)
     panel2.set_xlabel(r"Ground truth expression percentile", fontsize=10.0)
     panel2.set_ylim(0.0, 1.1)
     panel2.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
     rectangle = mplpatches.Rectangle((99.3, 0.05), 8.2, 0.55, color="white", zorder=3)
     panel2.add_patch(rectangle)
+
     panel3 = plt.axes([6.2 / 11, 1.8 / 11, relativePanelWidth, relativePanelHeight])
-    panel3.set_title("All transcripts", fontsize=10.0)
-    panel3.set_ylabel("Precision (PPV)", fontsize=10.0)
+    panel3.set_title(plot_title, fontsize=10.0)
+    panel3.set_ylabel("F1 Score", fontsize=10.0)
     panel3.set_ylim(0.0, 1.1)
     panel3.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
     rectangle = mplpatches.Rectangle((99.3, 0.05), 8.2, 0.5, color="white", zorder=3)
-    panel1.add_patch(rectangle)
+    panel3.add_patch(rectangle)
 
     panels = [panel1, panel2, panel3]
 
@@ -2058,7 +2060,7 @@ def TPR_F1_PPV_plot(
             i_ref_df, i_sample_df, num_bins
         )
 
-        statistics, meanStats = calc_TPR_F1_PPV_for_quantiles(
+        statistics, meanStats = calc_TPR_PPV_F1_for_quantiles(
             i_sample_TP_FP_FN_df, num_bins, novel_intron_ids
         )
 
@@ -2195,6 +2197,133 @@ def sensitivityStatBarPlot(ref, dfs, n):
             axs[i, j].set_xlabel(var, fontsize=9)
             for bars in axs[i, j].containers:
                 axs[i, j].bar_label(bars, fmt="%.1f%%")
+
+
+def calc_accuracy_stats_for_TP_FP_FN_df(i_sample_TP_FP_FN_df, novel_intron_ids=None):
+
+    stats = {"Sensitivity": np.nan, "PPV": np.nan, "FDR": np.nan, "F1": np.nan}
+
+    if novel_intron_ids is not None:
+        novel_introns = set(novel_intron_ids)
+
+    if novel_intron_ids is not None:
+        introns_in_df = set(i_sample_TP_FP_FN_df.index.values)
+        novel_introns = introns_in_df & novel_introns
+        if len(novel_introns) > 0:
+            FPs_df = i_sample_TP_FP_FN_df[i_sample_TP_FP_FN_df["class"] == "FP"]
+            i_sample_TP_FP_FN_df = i_sample_TP_FP_FN_df.loc[novel_introns, :]
+            # above would only incorporate TP and FNs according to the novel intron ids.
+            # must incorporate all the FPs too
+            i_sample_TP_FP_FN_df = pd.concat([i_sample_TP_FP_FN_df, FPs_df])
+        else:
+            # nothing to get stats for.
+            return stats
+
+    stats["Sensitivity"] = sensitivity(i_sample_TP_FP_FN_df)
+    stats["PPV"] = precision(i_sample_TP_FP_FN_df)
+    stats["FDR"] = fdr(i_sample_TP_FP_FN_df)
+    stats["F1"] = f1_score(i_sample_TP_FP_FN_df)
+
+    return stats
+
+
+def overall_knownTPR_novelTPR_and_FDR_barplot(
+    i_ref_df, progname_to_df_dict, novel_intron_ids=None
+):
+    """
+    Generates sensitivity statistics bar plots for downsampled data.
+    'ref': a pandas dataframe of reference transcript IDs and ground truth counts.
+    'dfs': a list of pandas dataframes of counts.
+    'n': an integer representing the number of bins out of 99 to stratify by.
+    """
+
+    df_data = []
+    for progname, i_sample_df in progname_to_df_dict.items():
+
+        i_sample_TP_FP_FN_df = calc_TP_FP_FN(i_ref_df, i_sample_df)
+
+        accuracy_stats = calc_accuracy_stats_for_TP_FP_FN_df(i_sample_TP_FP_FN_df)
+        if novel_intron_ids is not None:
+            accuracy_stats_for_novel = calc_accuracy_stats_for_TP_FP_FN_df(
+                i_sample_TP_FP_FN_df, novel_intron_ids
+            )
+
+        name, color, line = colorAndLabel(progname)
+        opacity = 1.0
+
+        df_data.append(
+            (
+                progname,
+                color,
+                line,
+                opacity,
+                progname,
+                "knownTPR",
+                accuracy_stats["Sensitivity"],
+            )
+        )
+        df_data.append(
+            (
+                progname,
+                color,
+                line,
+                opacity,
+                progname,
+                "novelTPR",
+                (
+                    accuracy_stats_for_novel["Sensitivity"]
+                    if novel_intron_ids is not None
+                    else np.nan
+                ),
+            )
+        )
+        df_data.append(
+            (
+                progname,
+                color,
+                line,
+                opacity,
+                progname,
+                "novelFDR",
+                accuracy_stats["FDR"],
+            )
+        )
+    df = pd.DataFrame(
+        df_data,
+        columns=[
+            "Name",
+            "Color",
+            "Line",
+            "Opacity",
+            "Program",
+            "Metric",
+            "Value",
+        ],
+    )
+
+    fig, axs = plt.subplots(
+        ncols=3, nrows=1, figsize=(7, 2.8), dpi=300, layout="constrained", sharey=True
+    )
+    tpr = ["knownTPR", "novelTPR", "novelFDR"]
+    for j in range(3):
+        plt_df = df[df["Metric"] == tpr[j]]
+        plt_df["Value"] *= 100
+        axs[j].barh(y=plt_df["Name"], width=plt_df["Value"], color=plt_df["Color"])
+        axs[j].set_xlim(0, 100)
+        axs[j].spines["right"].set_visible(False)
+        axs[j].spines["top"].set_visible(False)
+        var = (
+            tpr[j]
+            .replace("known", "Annotated ")
+            .replace("novelFDR", "FDR")
+            .replace("novel", "Unannotated ")
+        )
+        var = var.replace("FDR", "False Discovery Rate (FDR)").replace(
+            "TPR", "Sensitivity (TPR)"
+        )
+        axs[j].set_xlabel(var, fontsize=7)
+        for bars in axs[j].containers:
+            axs[j].bar_label(bars, fmt="%.1f%%")
 
 
 def overallStatBarPlot(ref, dfs, n):
